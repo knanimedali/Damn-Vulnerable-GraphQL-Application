@@ -1,0 +1,97 @@
+name: Run Local SAST Script
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  execute-sast-py:
+    name: Execute SAST.py Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Step A: Install Semgrep CLI (using Python's pip for current env)
+      # This ensures semgrep and semgrep-core are set up robustly.
+      - name: Install Semgrep CLI
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install semgrep
+          semgrep --version # Verify it's working and findable
+
+      # Step B: Install other Python dependencies from requirements.txt, EXCLUDING semgrep
+      - name: Install other Python dependencies
+        run: |
+          # Create a temporary requirements file that filters out the 'semgrep' line
+          grep -v '^semgrep$' requirements.txt > temp_requirements.txt || echo "temp_requirements.txt created (or requirements.txt was empty/no semgrep)"
+          # If 'semgrep' was the only line, temp_requirements.txt might be empty; pip handles this.
+          # If requirements.txt does not exist at all, this grep command might fail;
+          # add '|| true' to grep or ensure requirements.txt always exists.
+          # For safety, let's assume requirements.txt exists. If not, pip will complain.
+          pip install -r temp_requirements.txt
+          rm temp_requirements.txt # Clean up
+
+      # Step C: Install system-level SAST tools (cppcheck, flawfinder, phpcs etc.)
+      - name: Install system SAST tools
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            cppcheck \
+            flawfinder \
+            php-codesniffer
+          
+          GSEC_VERSION="2.19.0"
+          echo "Attempting to install GoSec v${GSEC_VERSION}..."
+          wget --quiet "https://github.com/securego/gosec/releases/download/v${GSEC_VERSION}/gosec_${GSEC_VERSION}_linux_amd64.tar.gz" -O gosec.tar.gz && \
+          tar -xzf gosec.tar.gz && \
+          sudo mv gosec /usr/local/bin/gosec && \
+          echo "GoSec installed successfully." || echo "GoSec binary installation failed or version not found, proceeding."
+          
+          echo "Skipping SwiftLint installation for this basic SAST setup."
+
+      # Step D: Setup .NET (for DevSkim)
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install DevSkim CLI
+        run: dotnet tool install --global Microsoft.CST.DevSkim.CLI
+
+      - name: Add .NET tools to PATH
+        run: echo "$HOME/.dotnet/tools" >> $GITHUB_PATH
+
+      # Step E: Setup Node.js (for ESLint, JSHint)
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install ESLint and JSHint
+        run: |
+          npm install -g eslint jshint
+          # Consider 'npm install -g @eslint/js' if your eslint.config.js requires it
+
+      # Step F: Run your sast.py script
+      - name: Run sast.py for SAST scan
+        run: python sast.py .
+
+      # Step G: Upload artifact
+      - name: Upload SAST HTML Report Artifact
+        if: success() || failure() 
+        uses: actions/upload-artifact@v4
+        with:
+          name: sast-html-report
+          path: reports/sast_report_*.html
+          if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Comprehensive Vulnerability Scan Report with visual charts and detailed insights.">
+    <title>Vulnerability Scan Report</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        @media print {
+            .page-break { page-break-after: always; }
+            table { page-break-inside: avoid; }
+            tr { page-break-inside: avoid; }
+        }
+        .pdf-container {
+            width: 210mm;
+            padding: 10mm;
+        }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <h1>Vulnerability Scan Report</h1>
+    <div class="container" id="report-content">
+        <!-- Summary Section -->
+        <div class="summary">
+            <h3>Scan Summary</h3>
+            <p><strong>File:</strong> {file_name}</p>
+            <p><strong>Scan Date:</strong> {scan_date}</p>
+            <p><strong>Total Issues:</strong> {total_issues}</p>
+        </div>
+        
+        <!-- Chart Section -->
+        <h2>Severity Distribution</h2>
+        <div class="chart-container">
+            <canvas id="severityChart" width="300" height="300"></canvas>
+        </div>
+
+        <!-- Detailed Results Section -->
+        <h2>Detailed Vulnerabilities</h2>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>File</th>
+                        <th>Line</th>
+                        <th>Severity</th>
+                        <th>Tool</th>
+                        <th>Description</th>
+                        <th>Code</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {results_rows}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <!-- Download Button -->
+    <button class="download-button" id="download-pdf">Download as PDF</button>
+    <div id="pdf-content" class="hidden"></div>
+
+    <script>
+        // Generate Chart
+        const ctx = document.getElementById('severityChart').getContext('2d');
+        const chart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Critical', 'High', 'Medium', 'Low'],
+                datasets: [{
+                    data: [{critical}, {high}, {medium}, {low}],
+                    backgroundColor: ['#f44336', '#ff9800', '#ffc107', '#4caf50'],
+                    hoverOffset: 8
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { position: 'bottom' }
+                }
+            }
+        });
+
+        // Improved PDF generation
+        document.getElementById('download-pdf').addEventListener('click', async function() {
+            const button = this;
+            button.disabled = true;
+            button.textContent = 'Generating PDF...';
+            
+            try {
+                // Create a clone of the report for PDF generation
+                const pdfContainer = document.getElementById('pdf-content');
+                pdfContainer.innerHTML = '';
+                pdfContainer.classList.remove('hidden');
+                
+                // Clone the report content
+                const reportContent = document.getElementById('report-content').cloneNode(true);
+                pdfContainer.appendChild(reportContent);
+                
+                // Convert chart to image
+                const chartImage = document.createElement('img');
+                chartImage.src = document.getElementById('severityChart').toDataURL('image/png');
+                const chartContainer = pdfContainer.querySelector('.chart-container');
+                chartContainer.innerHTML = '';
+                chartContainer.appendChild(chartImage);
+                
+                // Split large tables into multiple pages
+                const tableContainer = pdfContainer.querySelector('.table-container');
+                const table = tableContainer.querySelector('table');
+                const rows = Array.from(table.querySelectorAll('tbody tr'));
+                
+                if (rows.length > 20) {
+                    const rowsPerPage = 15;
+                    const pageCount = Math.ceil(rows.length / rowsPerPage);
+                    const tableHead = table.querySelector('thead').cloneNode(true);
+                    
+                    tableContainer.innerHTML = '';
+                    
+                    for (let i = 0; i < pageCount; i++) {
+                        const pageTable = document.createElement('table');
+                        pageTable.appendChild(tableHead.cloneNode(true));
+                        const pageBody = document.createElement('tbody');
+                        
+                        const startRow = i * rowsPerPage;
+                        const endRow = Math.min((i + 1) * rowsPerPage, rows.length);
+                        
+                        for (let j = startRow; j < endRow; j++) {
+                            pageBody.appendChild(rows[j].cloneNode(true));
+                        }
+                        
+                        pageTable.appendChild(pageBody);
+                        tableContainer.appendChild(pageTable);
+                        
+                        if (i < pageCount - 1) {
+                            const pageBreak = document.createElement('div');
+                            pageBreak.className = 'page-break';
+                            tableContainer.appendChild(pageBreak);
+                        }
+                    }
+                }
+                
+                // Generate PDF using html2canvas and jsPDF
+                const { jsPDF } = window.jspdf;
+                const doc = new jsPDF('p', 'mm', 'a4');
+                
+                async function addPageToDoc(element) {
+                    const canvas = await html2canvas(element, {
+                        scale: 2,
+                        useCORS: true,
+                        logging: false
+                    });
+                    
+                    const imgData = canvas.toDataURL('image/jpeg', 1.0);
+                    const imgWidth = 210 - 20; // A4 width minus margins
+                    const imgHeight = (canvas.height * imgWidth) / canvas.width;
+                    
+                    doc.addImage(imgData, 'JPEG', 10, 10, imgWidth, imgHeight);
+                }
+                
+                // First, render the summary and chart
+                const summarySection = pdfContainer.querySelector('.summary').parentElement;
+                await addPageToDoc(summarySection);
+                
+                // Then render each table (which might be split into multiple pages)
+                const tables = pdfContainer.querySelectorAll('.table-container > table');
+                for (let i = 0; i < tables.length; i++) {
+                    if (i > 0) doc.addPage();
+                    await addPageToDoc(tables[i]);
+                }
+                
+                // Save the PDF
+                doc.save('Vulnerability_Report.pdf');
+                
+                // Clean up
+                pdfContainer.innerHTML = '';
+                pdfContainer.classList.add('hidden');
+                
+            } catch (error) {
+                console.error('PDF generation error:', error);
+                alert('Error generating PDF: ' + error.message);
+            } finally {
+                button.disabled = false;
+                button.textContent = 'Download as PDF';
+            }
+        });
+    </script>
+</body>
+</html>
